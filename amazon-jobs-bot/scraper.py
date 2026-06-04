@@ -39,7 +39,11 @@ async def get_amazon_jobs(location="London"):
                 timeout=30000
             )
 
-            await page.wait_for_timeout(3000)
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(5000)
+
+            html = await page.content()
+            print(html[:1000])
 
             job_cards = await page.query_selector_all('[class*="job-tile"]')
 
