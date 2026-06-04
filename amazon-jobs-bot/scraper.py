@@ -44,9 +44,24 @@ async def get_amazon_jobs(location="London"):
             # 🔥 REAL DATA EXTRACTION (IMPORTANT FIX)
             cards_text = await page.evaluate("""
             () => {
+                const badKeywords = [
+                    "skip to content",
+                    "warning",
+                    "fraud",
+                    "cookie",
+                    "allow location",
+                    "dismiss",
+                    "open side menu"
+                ];
+
                 return Array.from(document.querySelectorAll('div'))
                     .map(el => el.innerText.trim())
-                    .filter(t => t && t.length > 80 && t.length < 800);
+                    .filter(t =>
+                        t &&
+                        t.length > 80 &&
+                        t.length < 800 &&
+                        !badKeywords.some(k => t.toLowerCase().includes(k))
+                    );
             }
             """)
 
@@ -54,12 +69,18 @@ async def get_amazon_jobs(location="London"):
             print("Sample:", cards_text[:3])
 
             # convert text blocks into pseudo jobs
-            for text in cards_text[:50]:  # limit spam
-                try:
-                    lines = text.split("\n")
-                    title = lines[0] if len(lines) > 0 else None
 
-                    if not title or len(title) < 5:
+            for text in cards_text[:50]:
+                try:
+                    # stronger filter
+                    if "apply" not in text.lower() and "job" not in text.lower():
+                        continue
+
+                    lines = [l.strip() for l in text.split("\n") if len(l.strip()) > 3]
+
+                    title = lines[0] if lines else None
+
+                    if not title or title.lower() in ["skip to content", "warning"]:
                         continue
 
                     job_id = hashlib.md5(title.encode()).hexdigest()
@@ -74,7 +95,7 @@ async def get_amazon_jobs(location="London"):
 
                 except:
                     continue
-
+           
         except Exception as e:
             print(f"Scraping error: {e}")
 
