@@ -36,17 +36,31 @@ async def get_amazon_jobs(location="London"):
         try:
             await page.goto(
                 f"https://www.jobsatamazon.co.uk/#/search?location={location}",
-                timeout=30000
+                timeout=60000
             )
 
             await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(5000)
+
+            await page.wait_for_timeout(8000)
+
+            await page.wait_for_selector("div", timeout=20000)
+
+            # await page.goto(
+            #     f"https://www.jobsatamazon.co.uk/#/search?location={location}",
+            #     timeout=30000
+            # )
+
+            # await page.wait_for_load_state("networkidle")
+            # await page.wait_for_timeout(5000)
 
             html = await page.content()
             print(html[:1000])
 
-            job_cards = await page.query_selector_all('[class*="job-tile"]')
+            #job_cards = await page.query_selector_all('[class*="job-tile"]')
 
+            job_cards = await page.query_selector_all("div")
+            print("Total divs:", len(job_cards))
+            
             for card in job_cards:
                 title_el = await card.query_selector('[class*="job-title"]')
                 location_el = await card.query_selector('[class*="location"]')
