@@ -1,0 +1,8 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "python amazon-jobs-bot/bot.py"
+
+[build.env]
+PLAYWRIGHT_BROWSERS_PATH = "0"
