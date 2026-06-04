@@ -4,7 +4,6 @@ import hashlib
 from playwright.async_api import async_playwright
 
 
-# 🔥 Force install Chromium safely (Railway fix)
 async def ensure_browser():
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -18,7 +17,6 @@ async def ensure_browser():
 async def get_amazon_jobs(location="London"):
     jobs = []
 
-    # 🔥 ensure browser exists BEFORE launching
     await ensure_browser()
 
     async with async_playwright() as p:
@@ -40,48 +38,50 @@ async def get_amazon_jobs(location="London"):
             )
 
             await page.wait_for_load_state("networkidle")
-
             await page.wait_for_timeout(8000)
 
-            await page.wait_for_selector("div", timeout=20000)
-
-            # await page.goto(
-            #     f"https://www.jobsatamazon.co.uk/#/search?location={location}",
-            #     timeout=30000
-            # )
-
-            # await page.wait_for_load_state("networkidle")
-            # await page.wait_for_timeout(5000)
-
+            # 🔥 DEBUG ONLY (keep for now)
             html = await page.content()
             print(html[:1000])
 
-            #job_cards = await page.query_selector_all('[class*="job-tile"]')
+            # ❌ REMOVE THIS (it causes fake results)
+            # job_cards = await page.query_selector_all("div")
 
-            job_cards = await page.query_selector_all("div")
-            print("Total divs:", len(job_cards))
-            
+            # ✅ TRY REAL SELECTOR (may need adjustment later)
+            job_cards = await page.query_selector_all(
+                "[class*='job'], [data-testid*='job'], [class*='Job']"
+            )
+
+            print("Total job-like elements:", len(job_cards))
+
             for card in job_cards:
-                title_el = await card.query_selector('[class*="job-title"]')
-                location_el = await card.query_selector('[class*="location"]')
-                pay_el = await card.query_selector('[class*="pay"]')
-                link_el = await card.query_selector('a')
+                try:
+                    title_el = await card.query_selector("h2, h3, [class*='title']")
+                    location_el = await card.query_selector("[class*='location']")
+                    pay_el = await card.query_selector("[class*='pay'], [class*='salary']")
+                    link_el = await card.query_selector("a")
 
-                title = await title_el.inner_text() if title_el else "N/A"
-                loc = await location_el.inner_text() if location_el else location
-                pay = await pay_el.inner_text() if pay_el else "See listing"
+                    title = await title_el.inner_text() if title_el else None
+                    loc = await location_el.inner_text() if location_el else location
+                    pay = await pay_el.inner_text() if pay_el else "See listing"
+                    url = await link_el.get_attribute("href") if link_el else ""
 
-                url = await link_el.get_attribute("href") if link_el else ""
+                    # 🔥 skip empty junk cards
+                    if not title:
+                        continue
 
-                job_id = hashlib.md5(f"{title}{loc}".encode()).hexdigest()
+                    job_id = hashlib.md5(f"{title}{loc}".encode()).hexdigest()
 
-                jobs.append({
-                    "id": job_id,
-                    "title": title,
-                    "location": loc,
-                    "pay": pay,
-                    "url": f"https://www.jobsatamazon.co.uk{url}"
-                })
+                    jobs.append({
+                        "id": job_id,
+                        "title": title,
+                        "location": loc,
+                        "pay": pay,
+                        "url": f"https://www.jobsatamazon.co.uk{url}" if url else ""
+                    })
+
+                except:
+                    continue
 
         except Exception as e:
             print(f"Scraping error: {e}")
