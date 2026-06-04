@@ -1,8 +1,10 @@
+import os
 import asyncio
 import hashlib
 from playwright.async_api import async_playwright
 
 
+# 🔥 Force install Chromium safely (Railway fix)
 async def ensure_browser():
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -16,6 +18,7 @@ async def ensure_browser():
 async def get_amazon_jobs(location="London"):
     jobs = []
 
+    # 🔥 ensure browser exists BEFORE launching
     await ensure_browser()
 
     async with async_playwright() as p:
@@ -31,64 +34,54 @@ async def get_amazon_jobs(location="London"):
         })
 
         try:
-            url = f"https://www.jobsatamazon.co.uk/#/search?location={location}"
-            await page.goto(url, timeout=60000)
+            await page.goto(
+                f"https://www.jobsatamazon.co.uk/#/search?location={location}",
+                timeout=60000
+            )
 
-            # wait for JS rendering
+            await page.wait_for_load_state("networkidle")
+
             await page.wait_for_timeout(8000)
 
-            # scroll to trigger lazy loading
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await page.wait_for_timeout(5000)
+            await page.wait_for_selector("div", timeout=20000)
 
-            # 🔥 REAL DATA EXTRACTION (IMPORTANT FIX)
-            cards_text = await page.evaluate("""
-            () => {
-                const badKeywords = [
-                    "skip to content",
-                    "warning",
-                    "fraud",
-                    "cookie",
-                    "allow location",
-                    "dismiss",
-                    "open side menu"
-                ];
+            # await page.goto(
+            #     f"https://www.jobsatamazon.co.uk/#/search?location={location}",
+            #     timeout=30000
+            # )
 
-                return Array.from(document.querySelectorAll('div'))
-                    .map(el => el.innerText.trim())
-                    .filter(t =>
-                        t &&
-                        t.length > 80 &&
-                        t.length < 800 &&
-                        !badKeywords.some(k => t.toLowerCase().includes(k))
-                    );
-            }
-        """)
+            # await page.wait_for_load_state("networkidle")
+            # await page.wait_for_timeout(5000)
 
-            print("Potential job blocks:", len(cards_text))
-            print("Sample:", cards_text[:3])
+            html = await page.content()
+            print(html[:1000])
 
-            # convert text blocks into pseudo jobs
-            for text in cards_text[:50]:  # limit spam
-                try:
-                    lines = text.split("\n")
-                    title = lines[0] if len(lines) > 0 else None
+            #job_cards = await page.query_selector_all('[class*="job-tile"]')
 
-                    if not title or len(title) < 5:
-                        continue
+            job_cards = await page.query_selector_all("div")
+            print("Total divs:", len(job_cards))
+            
+            for card in job_cards:
+                title_el = await card.query_selector('[class*="job-title"]')
+                location_el = await card.query_selector('[class*="location"]')
+                pay_el = await card.query_selector('[class*="pay"]')
+                link_el = await card.query_selector('a')
 
-                    job_id = hashlib.md5(title.encode()).hexdigest()
+                title = await title_el.inner_text() if title_el else "N/A"
+                loc = await location_el.inner_text() if location_el else location
+                pay = await pay_el.inner_text() if pay_el else "See listing"
 
-                    jobs.append({
-                        "id": job_id,
-                        "title": title,
-                        "location": location,
-                        "pay": "See listing",
-                        "url": url
-                    })
+                url = await link_el.get_attribute("href") if link_el else ""
 
-                except:
-                    continue
+                job_id = hashlib.md5(f"{title}{loc}".encode()).hexdigest()
+
+                jobs.append({
+                    "id": job_id,
+                    "title": title,
+                    "location": loc,
+                    "pay": pay,
+                    "url": f"https://www.jobsatamazon.co.uk{url}"
+                })
 
         except Exception as e:
             print(f"Scraping error: {e}")
