@@ -1,4 +1,3 @@
-import os
 import asyncio
 import hashlib
 from playwright.async_api import async_playwright
@@ -32,52 +31,45 @@ async def get_amazon_jobs(location="London"):
         })
 
         try:
-            await page.goto(
-                f"https://www.jobsatamazon.co.uk/#/search?location={location}",
-                timeout=60000
-            )
+            url = f"https://www.jobsatamazon.co.uk/#/search?location={location}"
+            await page.goto(url, timeout=60000)
 
-            await page.wait_for_load_state("networkidle")
+            # wait for JS rendering
             await page.wait_for_timeout(8000)
 
-            # 🔥 DEBUG ONLY (keep for now)
-            html = await page.content()
-            print(html[:1000])
+            # scroll to trigger lazy loading
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await page.wait_for_timeout(5000)
 
-            # ❌ REMOVE THIS (it causes fake results)
-            # job_cards = await page.query_selector_all("div")
+            # 🔥 REAL DATA EXTRACTION (IMPORTANT FIX)
+            cards_text = await page.evaluate("""
+            () => {
+                return Array.from(document.querySelectorAll('div'))
+                    .map(el => el.innerText.trim())
+                    .filter(t => t && t.length > 80 && t.length < 800);
+            }
+            """)
 
-            # ✅ TRY REAL SELECTOR (may need adjustment later)
-            job_cards = await page.query_selector_all(
-                "[class*='job'], [data-testid*='job'], [class*='Job']"
-            )
+            print("Potential job blocks:", len(cards_text))
+            print("Sample:", cards_text[:3])
 
-            print("Total job-like elements:", len(job_cards))
-
-            for card in job_cards:
+            # convert text blocks into pseudo jobs
+            for text in cards_text[:50]:  # limit spam
                 try:
-                    title_el = await card.query_selector("h2, h3, [class*='title']")
-                    location_el = await card.query_selector("[class*='location']")
-                    pay_el = await card.query_selector("[class*='pay'], [class*='salary']")
-                    link_el = await card.query_selector("a")
+                    lines = text.split("\n")
+                    title = lines[0] if len(lines) > 0 else None
 
-                    title = await title_el.inner_text() if title_el else None
-                    loc = await location_el.inner_text() if location_el else location
-                    pay = await pay_el.inner_text() if pay_el else "See listing"
-                    url = await link_el.get_attribute("href") if link_el else ""
-
-                    # 🔥 skip empty junk cards
-                    if not title:
+                    if not title or len(title) < 5:
                         continue
 
-                    job_id = hashlib.md5(f"{title}{loc}".encode()).hexdigest()
+                    job_id = hashlib.md5(title.encode()).hexdigest()
 
                     jobs.append({
                         "id": job_id,
                         "title": title,
-                        "location": loc,
-                        "pay": pay,
-                        "url": f"https://www.jobsatamazon.co.uk{url}" if url else ""
+                        "location": location,
+                        "pay": "See listing",
+                        "url": url
                     })
 
                 except:
