@@ -31,6 +31,10 @@ async def check_jobs():
     print(f"Checking jobs in {SEARCH_LOCATION}...")
 
     jobs = await get_amazon_jobs(SEARCH_LOCATION)
+    print(f"Total jobs scraped: {len(jobs)}")
+
+    for job in jobs[:5]:
+      print(job)
     new_count = 0
 
     for job in jobs:
