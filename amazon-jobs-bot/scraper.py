@@ -1,92 +1,70 @@
-import os
-import asyncio
+from playwright.sync_api import sync_playwright
 import hashlib
-from playwright.async_api import async_playwright
 
 
-# 🔥 Force install Chromium safely (Railway fix)
-async def ensure_browser():
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "playwright", "install", "chromium"
-        )
-        await proc.communicate()
-    except Exception as e:
-        print("Browser install skipped or failed:", e)
+BASE_URL = "https://www.jobsatamazon.co.uk"
 
 
-async def get_amazon_jobs(location="London"):
+def clean_text(text):
+    return " ".join(text.split()) if text else None
+
+
+def scrape_london_jobs():
     jobs = []
 
-    # 🔥 ensure browser exists BEFORE launching
-    await ensure_browser()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
-        )
+        url = f"{BASE_URL}/en/locations/london"
+        print("Opening:", url)
 
-        page = await browser.new_page()
+        page.goto(url, wait_until="networkidle")
 
-        await page.set_extra_http_headers({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
-        })
+        # Wait for any job links to appear
+        page.wait_for_timeout(5000)
 
-        try:
-            await page.goto(
-                f"https://www.jobsatamazon.co.uk/#/search?location={location}",
-                timeout=60000
-            )
+        # Grab all links (site is JS rendered, so this is safest)
+        links = page.query_selector_all("a")
 
-            await page.wait_for_load_state("networkidle")
+        seen = set()
 
-            await page.wait_for_timeout(8000)
+        for link in links:
+            href = link.get_attribute("href")
+            title = clean_text(link.inner_text())
 
-            await page.wait_for_selector("div", timeout=20000)
+            # Only keep job links
+            if not href or "/job" not in href:
+                continue
 
-            # await page.goto(
-            #     f"https://www.jobsatamazon.co.uk/#/search?location={location}",
-            #     timeout=30000
-            # )
+            full_url = href if href.startswith("http") else BASE_URL + href
 
-            # await page.wait_for_load_state("networkidle")
-            # await page.wait_for_timeout(5000)
+            # prevent duplicates
+            job_id = hashlib.md5(full_url.encode()).hexdigest()
+            if job_id in seen:
+                continue
+            seen.add(job_id)
 
-            html = await page.content()
-            print(html[:1000])
+            # basic filtering to avoid junk links
+            if len(title or "") < 5:
+                continue
 
-            #job_cards = await page.query_selector_all('[class*="job-tile"]')
+            jobs.append({
+                "id": job_id,
+                "title": title,
+                "location": "London",
+                "url": full_url
+            })
 
-            job_cards = await page.query_selector_all("div")
-            print("Total divs:", len(job_cards))
-            
-            for card in job_cards:
-                title_el = await card.query_selector('[class*="job-title"]')
-                location_el = await card.query_selector('[class*="location"]')
-                pay_el = await card.query_selector('[class*="pay"]')
-                link_el = await card.query_selector('a')
-
-                title = await title_el.inner_text() if title_el else "N/A"
-                loc = await location_el.inner_text() if location_el else location
-                pay = await pay_el.inner_text() if pay_el else "See listing"
-
-                url = await link_el.get_attribute("href") if link_el else ""
-
-                job_id = hashlib.md5(f"{title}{loc}".encode()).hexdigest()
-
-                jobs.append({
-                    "id": job_id,
-                    "title": title,
-                    "location": loc,
-                    "pay": pay,
-                    "url": f"https://www.jobsatamazon.co.uk{url}"
-                })
-
-        except Exception as e:
-            print(f"Scraping error: {e}")
-
-        finally:
-            await browser.close()
+        browser.close()
 
     return jobs
+
+
+if __name__ == "__main__":
+    jobs = scrape_london_jobs()
+
+    print(f"\nTotal jobs found: {len(jobs)}\n")
+
+    for job in jobs[:20]:
+        print(job)
