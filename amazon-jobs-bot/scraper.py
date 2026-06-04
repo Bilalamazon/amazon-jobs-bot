@@ -39,28 +39,31 @@ async def get_amazon_jobs(location="London"):
 
             # scroll to trigger lazy loading
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await page.wait_for_timeout(5000)
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(10000)
 
             # 🔥 REAL DATA EXTRACTION (IMPORTANT FIX)
             cards_text = await page.evaluate("""
             () => {
-                const badKeywords = [
-                    "skip to content",
-                    "warning",
+                const bad = [
+                    "amazon never requests",
                     "fraud",
+                    "warning",
+                    "skip",
+                    "interested in applying",
+                    "see all jobs",
                     "cookie",
-                    "allow location",
-                    "dismiss",
-                    "open side menu"
+                    "privacy",
+                    "location"
                 ];
 
                 return Array.from(document.querySelectorAll('div'))
                     .map(el => el.innerText.trim())
                     .filter(t =>
                         t &&
-                        t.length > 80 &&
+                        t.length > 120 &&
                         t.length < 800 &&
-                        !badKeywords.some(k => t.toLowerCase().includes(k))
+                        !bad.some(b => t.toLowerCase().includes(b))
                     );
             }
             """)
@@ -72,15 +75,19 @@ async def get_amazon_jobs(location="London"):
 
             for text in cards_text[:50]:
                 try:
-                    # stronger filter
-                    if "apply" not in text.lower() and "job" not in text.lower():
-                        continue
-
                     lines = [l.strip() for l in text.split("\n") if len(l.strip()) > 3]
 
-                    title = lines[0] if lines else None
+                    title = lines[0]
 
-                    if not title or title.lower() in ["skip to content", "warning"]:
+                    # reject obvious marketing text
+                    reject_words = [
+                        "apply", "interested", "see all", "amazon never", "warning"
+                    ]
+
+                    if any(w in title.lower() for w in reject_words):
+                        continue
+
+                    if len(title) < 10:
                         continue
 
                     job_id = hashlib.md5(title.encode()).hexdigest()
