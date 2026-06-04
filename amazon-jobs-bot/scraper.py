@@ -39,55 +39,42 @@ async def get_amazon_jobs(location="London"):
 
             # scroll to trigger lazy loading
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(10000)
+            await page.wait_for_timeout(5000)
 
             # 🔥 REAL DATA EXTRACTION (IMPORTANT FIX)
             cards_text = await page.evaluate("""
             () => {
-                const bad = [
-                    "amazon never requests",
-                    "fraud",
+                const badKeywords = [
+                    "skip to content",
                     "warning",
-                    "skip",
-                    "interested in applying",
-                    "see all jobs",
+                    "fraud",
                     "cookie",
-                    "privacy",
-                    "location"
+                    "allow location",
+                    "dismiss",
+                    "open side menu"
                 ];
 
                 return Array.from(document.querySelectorAll('div'))
                     .map(el => el.innerText.trim())
                     .filter(t =>
                         t &&
-                        t.length > 120 &&
+                        t.length > 80 &&
                         t.length < 800 &&
-                        !bad.some(b => t.toLowerCase().includes(b))
+                        !badKeywords.some(k => t.toLowerCase().includes(k))
                     );
             }
-            """)
+        """)
 
             print("Potential job blocks:", len(cards_text))
             print("Sample:", cards_text[:3])
 
             # convert text blocks into pseudo jobs
-
-            for text in cards_text[:50]:
+            for text in cards_text[:50]:  # limit spam
                 try:
-                    lines = [l.strip() for l in text.split("\n") if len(l.strip()) > 3]
+                    lines = text.split("\n")
+                    title = lines[0] if len(lines) > 0 else None
 
-                    title = lines[0]
-
-                    # reject obvious marketing text
-                    reject_words = [
-                        "apply", "interested", "see all", "amazon never", "warning"
-                    ]
-
-                    if any(w in title.lower() for w in reject_words):
-                        continue
-
-                    if len(title) < 10:
+                    if not title or len(title) < 5:
                         continue
 
                     job_id = hashlib.md5(title.encode()).hexdigest()
@@ -102,7 +89,7 @@ async def get_amazon_jobs(location="London"):
 
                 except:
                     continue
-           
+
         except Exception as e:
             print(f"Scraping error: {e}")
 
