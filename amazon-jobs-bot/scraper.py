@@ -1,21 +1,41 @@
-from playwright.async_api import async_playwright
+import os
+import asyncio
 import hashlib
+from playwright.async_api import async_playwright
+
+
+# 🔥 Force install Chromium safely (Railway fix)
+async def ensure_browser():
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "playwright", "install", "chromium"
+        )
+        await proc.communicate()
+    except Exception as e:
+        print("Browser install skipped or failed:", e)
 
 
 async def get_amazon_jobs(location="London"):
     jobs = []
 
+    # 🔥 ensure browser exists BEFORE launching
+    await ensure_browser()
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
+
         page = await browser.new_page()
 
         await page.set_extra_http_headers({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
         })
 
         try:
             await page.goto(
-                f'https://www.jobsatamazon.co.uk/#/search?location={location}',
+                f"https://www.jobsatamazon.co.uk/#/search?location={location}",
                 timeout=30000
             )
 
@@ -29,20 +49,20 @@ async def get_amazon_jobs(location="London"):
                 pay_el = await card.query_selector('[class*="pay"]')
                 link_el = await card.query_selector('a')
 
-                title = await title_el.inner_text() if title_el else 'N/A'
+                title = await title_el.inner_text() if title_el else "N/A"
                 loc = await location_el.inner_text() if location_el else location
-                pay = await pay_el.inner_text() if pay_el else 'See listing'
+                pay = await pay_el.inner_text() if pay_el else "See listing"
 
-                url = await link_el.get_attribute('href') if link_el else ''
+                url = await link_el.get_attribute("href") if link_el else ""
 
                 job_id = hashlib.md5(f"{title}{loc}".encode()).hexdigest()
 
                 jobs.append({
-                    'id': job_id,
-                    'title': title,
-                    'location': loc,
-                    'pay': pay,
-                    'url': f"https://www.jobsatamazon.co.uk{url}"
+                    "id": job_id,
+                    "title": title,
+                    "location": loc,
+                    "pay": pay,
+                    "url": f"https://www.jobsatamazon.co.uk{url}"
                 })
 
         except Exception as e:
