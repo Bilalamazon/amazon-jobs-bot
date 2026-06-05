@@ -5,8 +5,32 @@ from playwright.async_api import async_playwright
 BASE_URL = "https://www.jobsatamazon.co.uk"
 
 
-async def get_amazon_jobs(location="London"):
+# -----------------------------
+# 🔥 RECURSIVE EXTRACTOR (FIX)
+# -----------------------------
+def extract_jobs(obj, location):
     jobs = []
+
+    if isinstance(obj, dict):
+
+        # detect possible job node
+        if any(k in obj for k in ["title", "jobTitle", "name"]):
+            job = normalize_job(obj, location)
+            if job:
+                jobs.append(job)
+
+        # recurse deeper
+        for v in obj.values():
+            jobs.extend(extract_jobs(v, location))
+
+    elif isinstance(obj, list):
+        for item in obj:
+            jobs.extend(extract_jobs(item, location))
+
+    return jobs
+
+
+async def get_amazon_jobs(location="London"):
     graphql_data = []
 
     async with async_playwright() as p:
@@ -69,39 +93,20 @@ async def get_amazon_jobs(location="London"):
             await browser.close()
 
             # -----------------------------
-            # GRAPHQL JOB EXTRACTION
+            # GRAPHQL JOB EXTRACTION (FIXED)
             # -----------------------------
             print("\n=== EXTRACTING JOBS FROM GRAPHQL ===")
 
             jobs = []
 
             for entry in graphql_data:
-                if not isinstance(entry, dict):
-                    continue
+                if isinstance(entry, dict) and "data" in entry:
+                    jobs.extend(extract_jobs(entry["data"], location))
 
-                if "data" not in entry:
-                    continue
+            # remove None
+            jobs = [j for j in jobs if j]
 
-                data = entry["data"]
-
-                if isinstance(data, dict):
-                    for key, value in data.items():
-
-                        if isinstance(value, list):
-                            for job in value:
-                                normalized = normalize_job(job, location)
-                                if normalized:
-                                    jobs.append(normalized)
-
-                        elif isinstance(value, dict):
-                            for k2, v2 in value.items():
-                                if isinstance(v2, list):
-                                    for job in v2:
-                                        normalized = normalize_job(job, location)
-                                        if normalized:
-                                            jobs.append(normalized)
-
-            # remove duplicates
+            # deduplicate
             unique = {}
             for j in jobs:
                 if j and j.get("url"):
@@ -120,7 +125,7 @@ async def get_amazon_jobs(location="London"):
 
 
 # -----------------------------
-# 🔥 FIXED NORMALIZER (IMPROVED URL HANDLING)
+# 🔥 FIXED NORMALIZER (UNCHANGED BUT SAFE)
 # -----------------------------
 def normalize_job(job, location):
     try:
@@ -134,7 +139,6 @@ def normalize_job(job, location):
         job_id_raw = job.get("id") or job.get("jobId") or title + location
         job_id = hashlib.md5(str(job_id_raw).encode()).hexdigest()
 
-        # 🔥 STRONG URL RESOLUTION (FIXED VERSION)
         url = (
             job.get("url")
             or job.get("jobUrl")
@@ -142,7 +146,6 @@ def normalize_job(job, location):
             or job.get("externalUrl")
         )
 
-        # nested: links object
         if not url and isinstance(job.get("links"), dict):
             url = (
                 job["links"].get("apply")
@@ -150,7 +153,6 @@ def normalize_job(job, location):
                 or job["links"].get("job")
             )
 
-        # nested: jobDetails object
         if not url and isinstance(job.get("jobDetails"), dict):
             url = (
                 job["jobDetails"].get("applyUrl")
@@ -158,7 +160,6 @@ def normalize_job(job, location):
                 or job["jobDetails"].get("link")
             )
 
-        # fallback: build from ID
         if not url and job.get("id"):
             url = f"https://www.jobsatamazon.co.uk/job/{job.get('id')}"
 
