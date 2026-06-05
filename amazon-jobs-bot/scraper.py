@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import json
 from playwright.async_api import async_playwright
 
 BASE_URL = "https://www.jobsatamazon.co.uk"
@@ -13,11 +12,10 @@ def normalize_job(job, location):
     try:
         title = job.get("jobTitle") or job.get("title") or "Amazon Job"
 
-        raw_job_id = job.get("jobId") or job.get("id") or (title + location)
-
-        stable_id = hashlib.md5(str(raw_job_id).encode()).hexdigest()
-
         job_id = job.get("jobId")
+        raw_id = job_id or (title + location)
+
+        stable_id = hashlib.md5(str(raw_id).encode()).hexdigest()
 
         return {
             "id": stable_id,
@@ -31,37 +29,21 @@ def normalize_job(job, location):
                 or "See listing"
             )
         }
-
     except Exception:
         return None
 
 
 # -----------------------------
-# 🔥 SMART GRAPHQL EXTRACTOR
+# 🔥 ONLY REAL EXTRACTOR (NO OVERENGINEERING)
 # -----------------------------
-def extract_from_graphql(data, location):
+def extract_jobs_from_cards(job_cards, location):
     jobs = []
 
-    if not isinstance(data, dict):
-        return jobs
-
-    for _, value in data.items():
-
-        if isinstance(value, dict):
-
-            # CASE 1: direct jobCards
-            if "jobCards" in value and isinstance(value["jobCards"], list):
-                for job in value["jobCards"]:
-                    norm = normalize_job(job, location)
-                    if norm:
-                        jobs.append(norm)
-
-            # CASE 2: nested objects
-            jobs.extend(extract_from_graphql(value, location))
-
-        elif isinstance(value, list):
-            for item in value:
-                jobs.extend(extract_from_graphql(item, location))
+    for job in job_cards:
+        if isinstance(job, dict):
+            norm = normalize_job(job, location)
+            if norm:
+                jobs.append(norm)
 
     return jobs
 
@@ -93,16 +75,30 @@ async def get_amazon_jobs(location="London"):
         })
 
         # -----------------------------
-        # 🔥 GRAPHQL CAPTURE
+        # 🔥 GRAPHQL CAPTURE (STRICT FILTER)
         # -----------------------------
         async def handle_response(response):
             try:
-                if "graphql" in response.url.lower():
-                    print("GRAPHQL HIT:", response.url)
-                    try:
-                        graphql_data.append(await response.json())
-                    except Exception:
-                        pass
+                url = response.url.lower()
+
+                # IMPORTANT FILTER: only job search endpoint
+                if "graphql" not in url:
+                    return
+
+                data = await response.json()
+
+                # ONLY keep responses that actually contain jobCards
+                if (
+                    isinstance(data, dict)
+                    and "data" in data
+                    and isinstance(data["data"], dict)
+                    and "searchJobCardsByLocation" in data["data"]
+                ):
+                    job_cards = data["data"]["searchJobCardsByLocation"].get("jobCards")
+
+                    if job_cards:  # 👈 KEY FIX: ignore empty responses
+                        graphql_data.append(data["data"])
+
             except Exception:
                 pass
 
@@ -117,58 +113,48 @@ async def get_amazon_jobs(location="London"):
             await page.wait_for_timeout(5000)
 
             # -----------------------------
-            # FORCE SPA ACTIVATION
+            # FORCE JOB LOAD
             # -----------------------------
             try:
                 await page.click("text=See all jobs")
-                print("Clicked: See all jobs")
             except:
                 try:
                     await page.click("text=Find your next job")
-                    print("Clicked: Find your next job")
                 except:
-                    print("No job button clicked (fallback mode)")
+                    pass
 
-            # IMPORTANT: trigger lazy GraphQL
-            await page.mouse.wheel(0, 1500)
-            await page.wait_for_timeout(15000)
-            await page.wait_for_load_state("networkidle")
+            # 🔥 IMPORTANT: trigger lazy loading properly
+            await page.mouse.wheel(0, 3000)
+            await page.wait_for_timeout(20000)
 
-            print("Collected GraphQL responses:", len(graphql_data))
+            print("Collected valid GraphQL payloads:", len(graphql_data))
 
             await browser.close()
 
             # -----------------------------
-            # 🔥 EXTRACTION (ROBUST)
+            # 🔥 FINAL EXTRACTION
             # -----------------------------
             print("\n=== EXTRACTING JOBS ===")
 
-            jobs = []
+            all_jobs = []
 
             for entry in graphql_data:
-                if not isinstance(entry, dict):
-                    continue
+                data = entry.get("searchJobCardsByLocation", {})
+                job_cards = data.get("jobCards", [])
 
-                data = entry.get("data")
-                if not isinstance(data, dict):
-                    continue
-
-                jobs.extend(extract_from_graphql(data, location))
+                all_jobs.extend(extract_jobs_from_cards(job_cards, location))
 
             # -----------------------------
-            # CLEAN + DEDUP (IMPORTANT FIX)
+            # DEDUP (REAL jobId BASED)
             # -----------------------------
-            cleaned = []
             seen = set()
+            cleaned = []
 
-            for j in jobs:
-                if not j:
-                    continue
+            for j in all_jobs:
+                job_id = j.get("jobId")
 
-                key = j.get("jobId")  # FIX: do NOT use hashed id for dedup
-
-                if key and key not in seen:
-                    seen.add(key)
+                if job_id and job_id not in seen:
+                    seen.add(job_id)
                     cleaned.append(j)
 
             print(f"Total jobs scraped: {len(cleaned)}")
