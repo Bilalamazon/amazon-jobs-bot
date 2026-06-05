@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 from playwright.async_api import async_playwright
 
 BASE_URL = "https://www.jobsatamazon.co.uk"
@@ -13,7 +14,7 @@ def extract_jobs(obj, location):
 
     if isinstance(obj, dict):
 
-        # 🔥 FIX: stricter job detection (prevents false positives)
+        # 🔥 STRICT JOB DETECTION
         if (
             obj.get("title")
             or obj.get("jobTitle")
@@ -90,11 +91,11 @@ async def get_amazon_jobs(location="London"):
                 wait_until="domcontentloaded"
             )
 
-            # -----------------------------
-            # 🔥 FORCE JOB LISTING LOAD
-            # -----------------------------
             await page.wait_for_timeout(5000)
 
+            # -----------------------------
+            # CLICK TRIGGER (SPA LOAD)
+            # -----------------------------
             try:
                 await page.click("text=See all jobs")
                 print("Clicked: See all jobs")
@@ -105,18 +106,26 @@ async def get_amazon_jobs(location="London"):
                 except:
                     print("No job button clicked (fallback mode)")
 
-            # allow GraphQL to fully load jobs
-            await page.wait_for_timeout(25000)
+            await page.wait_for_timeout(20000)
             await page.wait_for_load_state("networkidle")
 
             print("Current URL:", page.url)
             print("Page Title:", await page.title())
             print("Collected GraphQL responses:", len(graphql_data))
 
+            # -----------------------------
+            # 🔥 DEBUG STEP (IMPORTANT ADDITION)
+            # -----------------------------
+            print("\n=== GRAPHQL STRUCTURE SAMPLE ===")
+
+            for entry in graphql_data[:1]:  # only first response for debugging
+                if isinstance(entry, dict) and "data" in entry:
+                    print(json.dumps(entry["data"], indent=2)[:2000])
+
             await browser.close()
 
             # -----------------------------
-            # 🔥 GRAPHQL JOB EXTRACTION (FIXED)
+            # 🔥 GRAPHQL JOB EXTRACTION
             # -----------------------------
             print("\n=== EXTRACTING JOBS FROM GRAPHQL ===")
 
@@ -125,13 +134,7 @@ async def get_amazon_jobs(location="London"):
             for entry in graphql_data:
                 if isinstance(entry, dict) and "data" in entry:
                     data = entry["data"]
-
-                    # 🔥 FIX: ensure full deep traversal
                     jobs.extend(extract_jobs(data, location))
-
-                    if isinstance(data, dict):
-                        for v in data.values():
-                            jobs.extend(extract_jobs(v, location))
 
             jobs = [j for j in jobs if j]
 
@@ -153,7 +156,7 @@ async def get_amazon_jobs(location="London"):
 
 
 # -----------------------------
-# 🔥 NORMALIZER (UNCHANGED)
+# 🔥 NORMALIZER
 # -----------------------------
 def normalize_job(job, location):
     try:
