@@ -7,30 +7,42 @@ BASE_URL = "https://www.jobsatamazon.co.uk"
 
 
 # -----------------------------
-# 🔥 FALLBACK RECURSIVE EXTRACTOR
+# 🔥 NORMALIZER (ALWAYS SAFE OUTPUT)
 # -----------------------------
-def extract_jobs(obj, location):
-    jobs = []
+def normalize_job(job, location):
+    try:
+        title = job.get("jobTitle") or job.get("title") or "Amazon Job"
 
-    if isinstance(obj, dict):
+        raw_job_id = job.get("jobId") or job.get("id") or (title + location)
 
-        if obj.get("title") or obj.get("jobTitle") or obj.get("name"):
-            job = normalize_job(obj, location)
-            if job:
-                jobs.append(job)
+        # stable internal id for bot tracking
+        stable_id = hashlib.md5(str(raw_job_id).encode()).hexdigest()
 
-        for v in obj.values():
-            jobs.extend(extract_jobs(v, location))
+        job_id = job.get("jobId")  # real Amazon id if exists
 
-    elif isinstance(obj, list):
-        for item in obj:
-            jobs.extend(extract_jobs(item, location))
+        return {
+            "id": stable_id,          # bot-safe unique id
+            "jobId": job_id,          # IMPORTANT for your bot logic
+            "title": title,
+            "location": job.get("city") or location,
+            "url": (
+                f"{BASE_URL}/job/{job_id}"
+                if job_id
+                else "N/A"
+            ),
+            "pay": (
+                job.get("totalPayRateMinL10N")
+                or job.get("totalPayRateMin")
+                or "See listing"
+            )
+        }
 
-    return jobs
+    except Exception:
+        return None
 
 
 # -----------------------------
-# 🔥 MAIN SCRAPER
+# 🔥 SCRAPER
 # -----------------------------
 async def get_amazon_jobs(location="London"):
     graphql_data = []
@@ -95,24 +107,14 @@ async def get_amazon_jobs(location="London"):
             await page.wait_for_timeout(20000)
             await page.wait_for_load_state("networkidle")
 
-            print("Current URL:", page.url)
-            print("Page Title:", await page.title())
             print("Collected GraphQL responses:", len(graphql_data))
-
-            # -----------------------------
-            # DEBUG SAMPLE (OPTIONAL)
-            # -----------------------------
-            print("\n=== GRAPHQL SAMPLE ===")
-            for entry in graphql_data[:1]:
-                if isinstance(entry, dict):
-                    print(json.dumps(entry, indent=2)[:2000])
 
             await browser.close()
 
             # -----------------------------
-            # 🔥 FINAL EXTRACTION (FIXED)
+            # 🔥 EXTRACTION (FIXED LOGIC)
             # -----------------------------
-            print("\n=== EXTRACTING JOBS FROM GRAPHQL ===")
+            print("\n=== EXTRACTING JOBS ===")
 
             jobs = []
 
@@ -122,70 +124,39 @@ async def get_amazon_jobs(location="London"):
 
                 data = entry.get("data", {})
 
-                if isinstance(data, dict):
+                # PRIMARY SOURCE (Amazon GraphQL)
+                if isinstance(data, dict) and "searchJobCardsByLocation" in data:
+                    cards = data["searchJobCardsByLocation"].get("jobCards", [])
 
-                    # ✅ PRIMARY SOURCE (MOST RELIABLE)
-                    if "searchJobCardsByLocation" in data:
-                        cards = data["searchJobCardsByLocation"].get("jobCards", [])
-
-                        for c in cards:
-                            job = normalize_job(c, location)
-                            if job:
-                                jobs.append(job)
-
-                    else:
-                        jobs.extend(extract_jobs(data, location))
-
-            # remove None
-            jobs = [j for j in jobs if j]
+                    for job in cards:
+                        normalized = normalize_job(job, location)
+                        if normalized:
+                            jobs.append(normalized)
 
             # -----------------------------
-            # 🔥 STABLE DEDUP (BY id)
+            # CLEAN + DEDUP
             # -----------------------------
-            unique = {}
+            cleaned = []
+            seen = set()
+
             for j in jobs:
-                if isinstance(j, dict) and j.get("id"):
-                    unique[j["id"]] = j
+                if not j:
+                    continue
 
-            jobs = list(unique.values())
+                key = j.get("jobId") or j.get("id")
 
-            print(f"Total jobs scraped: {len(jobs)}")
+                if key and key not in seen:
+                    seen.add(key)
+                    cleaned.append(j)
 
-            return jobs
+            print(f"Total jobs scraped: {len(cleaned)}")
+
+            return cleaned
 
         except Exception as e:
             print("Scraping error:", e)
             await browser.close()
             return []
-
-
-# -----------------------------
-# 🔥 NORMALIZER (FINAL FIX)
-# -----------------------------
-def normalize_job(job, location):
-    try:
-        title = job.get("jobTitle") or job.get("title") or "Amazon Job"
-
-        raw_id = job.get("jobId") or job.get("id") or title + location
-        job_id = hashlib.md5(str(raw_id).encode()).hexdigest()
-
-        return {
-            "id": job_id,  # 🔥 ALWAYS SAFE FOR BOT
-            "jobId": job.get("jobId"),
-            "title": title,
-            "location": job.get("city") or location,
-            "url": (
-                f"{BASE_URL}/job/{job.get('jobId')}"
-                if job.get("jobId")
-                else "N/A"
-            ),
-            "pay": job.get("totalPayRateMinL10N")
-                    or job.get("totalPayRateMin")
-                    or "See listing"
-        }
-
-    except Exception:
-        return None
 
 
 # -----------------------------
