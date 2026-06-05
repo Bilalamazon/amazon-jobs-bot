@@ -29,7 +29,6 @@ async def get_amazon_jobs(location="London"):
             )
         })
 
-        # Capture GraphQL responses
         async def handle_response(response):
             try:
                 if "graphql" in response.url.lower():
@@ -65,15 +64,16 @@ async def get_amazon_jobs(location="London"):
 
             print("Current URL:", page.url)
             print("Page Title:", await page.title())
-
-            print("\nCollected GraphQL responses:", len(graphql_data))
+            print("Collected GraphQL responses:", len(graphql_data))
 
             await browser.close()
 
             # -----------------------------
-            # 🔥 GRAPHQL JOB EXTRACTION
+            # GRAPHQL JOB EXTRACTION
             # -----------------------------
             print("\n=== EXTRACTING JOBS FROM GRAPHQL ===")
+
+            jobs = []
 
             for entry in graphql_data:
                 if not isinstance(entry, dict):
@@ -84,26 +84,27 @@ async def get_amazon_jobs(location="London"):
 
                 data = entry["data"]
 
-                # Case 1: data is dict with lists inside
                 if isinstance(data, dict):
                     for key, value in data.items():
 
-                        # direct list of jobs
                         if isinstance(value, list):
                             for job in value:
-                                jobs.append(normalize_job(job, location))
+                                normalized = normalize_job(job, location)
+                                if normalized:
+                                    jobs.append(normalized)
 
-                        # nested dict
                         elif isinstance(value, dict):
                             for k2, v2 in value.items():
                                 if isinstance(v2, list):
                                     for job in v2:
-                                        jobs.append(normalize_job(job, location))
+                                        normalized = normalize_job(job, location)
+                                        if normalized:
+                                            jobs.append(normalized)
 
             # remove duplicates
             unique = {}
             for j in jobs:
-                if j and "url" in j:
+                if j and j.get("url"):
                     unique[j["url"]] = j
 
             jobs = list(unique.values())
@@ -118,11 +119,10 @@ async def get_amazon_jobs(location="London"):
             return []
 
 
+# -----------------------------
+# 🔥 IMPROVED NORMALIZER (FIXED)
+# -----------------------------
 def normalize_job(job, location):
-    """
-    Try to normalize Amazon GraphQL job objects safely
-    """
-
     try:
         title = (
             job.get("title")
@@ -131,20 +131,23 @@ def normalize_job(job, location):
             or "Amazon Job"
         )
 
-        job_id_raw = (
-            job.get("id")
-            or job.get("jobId")
-            or title + location
-        )
-
+        job_id_raw = job.get("id") or job.get("jobId") or title + location
         job_id = hashlib.md5(str(job_id_raw).encode()).hexdigest()
 
+        # 🔥 FIX: robust URL extraction
         url = (
             job.get("url")
-            or job.get("link")
             or job.get("jobUrl")
-            or ""
+            or job.get("applyUrl")
+            or job.get("externalUrl")
         )
+
+        # fallback: nested links
+        if not url and isinstance(job.get("links"), dict):
+            url = (
+                job["links"].get("apply")
+                or job["links"].get("self")
+            )
 
         return {
             "id": job_id,
