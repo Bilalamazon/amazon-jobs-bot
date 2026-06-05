@@ -6,7 +6,7 @@ BASE_URL = "https://www.jobsatamazon.co.uk"
 
 
 # -----------------------------
-# 🔥 NORMALIZER (STABLE OUTPUT)
+# 🔥 NORMALIZER
 # -----------------------------
 def normalize_job(job, location):
     try:
@@ -49,7 +49,7 @@ def extract_jobs_from_cards(job_cards, location):
 
 
 # -----------------------------
-# 🔥 SCRAPER (REAL FIX)
+# 🔥 SCRAPER (FIXED PROPERLY)
 # -----------------------------
 async def get_amazon_jobs(location="London"):
     graphql_data = []
@@ -74,38 +74,41 @@ async def get_amazon_jobs(location="London"):
             )
         })
 
-        # -----------------------------
-        # 🔥 GRAPHQL CAPTURE (FIXED)
-        # -----------------------------
-        async def handle_response(response):
+        # -------------------------------------------------
+        # 🔥 FIX: ROUTE INTERCEPTION (THIS IS THE REAL FIX)
+        # -------------------------------------------------
+        async def handle_route(route, request):
             try:
-                url = response.url.lower()
+                if "graphql" not in request.url.lower():
+                    return await route.continue_()
 
-                if "graphql" not in url:
-                    return
+                response = await route.fetch()
 
-                data = await response.json()
+                try:
+                    data = await response.json()
+                except Exception:
+                    return await route.continue_()
 
-                # ---- FIX: detect REAL job payload anywhere ----
-                if not isinstance(data, dict):
-                    return
+                # ONLY keep valid job payloads
+                if (
+                    isinstance(data, dict)
+                    and "data" in data
+                    and isinstance(data["data"], dict)
+                    and "searchJobCardsByLocation" in data["data"]
+                ):
+                    job_block = data["data"]["searchJobCardsByLocation"]
 
-                # case 1: direct shape
-                if "data" in data and isinstance(data["data"], dict):
-                    inner = data["data"]
+                    if job_block.get("jobCards"):
+                        graphql_data.append(job_block)
+                        print("Captured GraphQL payload")
 
-                    if "searchJobCardsByLocation" in inner:
-                        job_cards = inner["searchJobCardsByLocation"].get("jobCards", [])
-
-                        if job_cards:
-                            graphql_data.append(inner)
-
-                            print("Captured GraphQL payload (jobCards found)")
+                return await route.fulfill(response=response)
 
             except Exception:
-                pass
+                return await route.continue_()
 
-        page.on("response", lambda r: asyncio.create_task(handle_response(r)))
+        # IMPORTANT: attach BEFORE goto
+        await page.route("**/*", handle_route)
 
         url = f"{BASE_URL}/app#/jobSearch"
 
@@ -114,11 +117,10 @@ async def get_amazon_jobs(location="London"):
 
             await page.goto(url, timeout=60000, wait_until="domcontentloaded")
 
-            # give SPA time
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(4000)
 
             # -----------------------------
-            # FORCE UI LOAD
+            # FORCE JOB LOAD
             # -----------------------------
             try:
                 await page.click("text=See all jobs", timeout=3000)
@@ -128,42 +130,33 @@ async def get_amazon_jobs(location="London"):
                 except:
                     pass
 
-            # 🔥 CRITICAL: force network re-trigger
-            await page.mouse.wheel(0, 3000)
-            await page.wait_for_timeout(5000)
-
-            # wait for actual API bursts
-            await page.wait_for_load_state("networkidle")
+            # trigger lazy load
+            await page.mouse.wheel(0, 4000)
             await page.wait_for_timeout(8000)
+            await page.wait_for_load_state("networkidle")
 
             print(f"Collected GraphQL payloads: {len(graphql_data)}")
 
             await browser.close()
 
             # -----------------------------
-            # 🔥 EXTRACTION
+            # EXTRACTION
             # -----------------------------
             print("\n=== EXTRACTING JOBS ===")
 
             all_jobs = []
 
-            for entry in graphql_data:
-                block = entry.get("searchJobCardsByLocation", {})
-
-                if isinstance(block, dict):
-                    job_cards = block.get("jobCards", [])
-                    all_jobs.extend(extract_jobs_from_cards(job_cards, location))
+            for block in graphql_data:
+                job_cards = block.get("jobCards", [])
+                all_jobs.extend(extract_jobs_from_cards(job_cards, location))
 
             # -----------------------------
-            # DEDUP (REAL FIX)
+            # DEDUP
             # -----------------------------
             seen = set()
             cleaned = []
 
             for j in all_jobs:
-                if not j:
-                    continue
-
                 job_id = j.get("jobId")
 
                 if job_id and job_id not in seen:
