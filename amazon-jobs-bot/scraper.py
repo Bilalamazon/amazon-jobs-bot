@@ -49,7 +49,7 @@ def extract_jobs_from_cards(job_cards, location):
 
 
 # -----------------------------
-# 🔥 SCRAPER (FINAL FIX)
+# 🔥 SCRAPER (FIXED + STABLE)
 # -----------------------------
 async def get_amazon_jobs(location="London"):
     graphql_data = []
@@ -75,37 +75,36 @@ async def get_amazon_jobs(location="London"):
         })
 
         # -------------------------------------------------
-        # 🔥 ROUTE INTERCEPTION (FIXED PROPERLY)
+        # 🔥 FIX 1: CAPTURE ONLY REAL JOB PAYLOADS
         # -------------------------------------------------
-        async def handle_route(route, request):
+        async def handle_response(response):
             try:
-                if "graphql" not in request.url.lower():
-                    return await route.continue_()
+                if "graphql" not in response.url.lower():
+                    return
 
-                response = await route.fetch()
+                data = await response.json()
 
-                try:
-                    data = await response.json()
-                except Exception:
-                    return await route.continue_()
-
-                # ONLY check structure, DO NOT filter jobCards here
+                # safer checks (prevents empty payload issues)
                 if (
                     isinstance(data, dict)
                     and "data" in data
                     and isinstance(data["data"], dict)
-                    and "searchJobCardsByLocation" in data["data"]
                 ):
-                    graphql_data.append(data["data"])
-                    print("Captured GraphQL payload")
+                    inner = data["data"]
 
-                return await route.fulfill(response=response)
+                    block = inner.get("searchJobCardsByLocation")
+
+                    if (
+                        isinstance(block, dict)
+                        and block.get("jobCards")
+                    ):
+                        graphql_data.append(inner)
+                        print("Captured GraphQL payload")
 
             except Exception:
-                return await route.continue_()
+                pass
 
-        # IMPORTANT: attach BEFORE navigation
-        await page.route("**/*", handle_route)
+        page.on("response", lambda r: asyncio.create_task(handle_response(r)))
 
         url = f"{BASE_URL}/app#/jobSearch"
 
@@ -114,11 +113,12 @@ async def get_amazon_jobs(location="London"):
 
             await page.goto(url, timeout=60000, wait_until="domcontentloaded")
 
+            # allow SPA init
             await page.wait_for_timeout(4000)
 
-            # -----------------------------
-            # FORCE UI LOAD
-            # -----------------------------
+            # -------------------------------------------------
+            # 🔥 FIX 2: FORCE UI TRIGGERS (IMPORTANT)
+            # -------------------------------------------------
             try:
                 await page.click("text=See all jobs", timeout=3000)
             except:
@@ -127,31 +127,37 @@ async def get_amazon_jobs(location="London"):
                 except:
                     pass
 
-            # trigger lazy network calls
-            await page.mouse.wheel(0, 4000)
-            await page.wait_for_timeout(10000)
+            # 🔥 FIX 3: force lazy GraphQL triggers
+            await page.mouse.wheel(0, 5000)
+            await page.wait_for_timeout(12000)
+
+            # IMPORTANT: wait extra time for API bursts
             await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(5000)
 
             print(f"Collected GraphQL payloads: {len(graphql_data)}")
 
             await browser.close()
 
-            # -----------------------------
-            # EXTRACTION
-            # -----------------------------
+            # -------------------------------------------------
+            # 🔥 EXTRACTION
+            # -------------------------------------------------
             print("\n=== EXTRACTING JOBS ===")
 
             all_jobs = []
 
             for block in graphql_data:
-                job_cards = block.get("searchJobCardsByLocation", {}).get("jobCards", [])
+                job_cards = (
+                    block
+                    .get("searchJobCardsByLocation", {})
+                    .get("jobCards", [])
+                )
 
-                if job_cards:
-                    all_jobs.extend(extract_jobs_from_cards(job_cards, location))
+                all_jobs.extend(extract_jobs_from_cards(job_cards, location))
 
-            # -----------------------------
-            # DEDUP (SAFE)
-            # -----------------------------
+            # -------------------------------------------------
+            # 🔥 FIX 4: SAFE DEDUP (REAL jobId ONLY)
+            # -------------------------------------------------
             seen = set()
             cleaned = []
 
