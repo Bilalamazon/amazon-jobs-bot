@@ -1,25 +1,12 @@
-import os
 import asyncio
 import hashlib
 from playwright.async_api import async_playwright
 
-
-# 🔥 Force install Chromium safely (Railway fix)
-async def ensure_browser():
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "playwright", "install", "chromium"
-        )
-        await proc.communicate()
-    except Exception as e:
-        print("Browser install skipped or failed:", e)
+BASE_URL = "https://www.jobsatamazon.co.uk"
 
 
 async def get_amazon_jobs(location="London"):
     jobs = []
-
-    # 🔥 ensure browser exists BEFORE launching
-    await ensure_browser()
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -30,63 +17,64 @@ async def get_amazon_jobs(location="London"):
         page = await browser.new_page()
 
         await page.set_extra_http_headers({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         })
 
+        url = f"{BASE_URL}/en/locations/{location.lower()}"
+
         try:
-            await page.goto(
-                f"https://www.jobsatamazon.co.uk/#/search?location={location}",
-                timeout=60000
-            )
+            await page.goto(url, timeout=60000)
 
-            await page.wait_for_load_state("networkidle")
+            # better than networkidle for JS sites
+            await page.wait_for_timeout(6000)
 
-            await page.wait_for_timeout(8000)
+            # grab ALL links first (site is SPA)
+            links = await page.query_selector_all("a")
 
-            await page.wait_for_selector("div", timeout=20000)
+            seen = set()
 
-            # await page.goto(
-            #     f"https://www.jobsatamazon.co.uk/#/search?location={location}",
-            #     timeout=30000
-            # )
+            for link in links:
+                try:
+                    href = await link.get_attribute("href")
+                    title = (await link.inner_text()).strip()
 
-            # await page.wait_for_load_state("networkidle")
-            # await page.wait_for_timeout(5000)
+                    if not href or "/job" not in href:
+                        continue
 
-            html = await page.content()
-            print(html[:1000])
+                    full_url = href if href.startswith("http") else BASE_URL + href
 
-            #job_cards = await page.query_selector_all('[class*="job-tile"]')
+                    job_id = hashlib.md5(full_url.encode()).hexdigest()
 
-            job_cards = await page.query_selector_all("div")
-            print("Total divs:", len(job_cards))
-            
-            for card in job_cards:
-                title_el = await card.query_selector('[class*="job-title"]')
-                location_el = await card.query_selector('[class*="location"]')
-                pay_el = await card.query_selector('[class*="pay"]')
-                link_el = await card.query_selector('a')
+                    if job_id in seen:
+                        continue
+                    seen.add(job_id)
 
-                title = await title_el.inner_text() if title_el else "N/A"
-                loc = await location_el.inner_text() if location_el else location
-                pay = await pay_el.inner_text() if pay_el else "See listing"
+                    # filter junk titles
+                    if len(title) < 5:
+                        continue
 
-                url = await link_el.get_attribute("href") if link_el else ""
+                    jobs.append({
+                        "id": job_id,
+                        "title": title,
+                        "location": location,
+                        "pay": "See listing",
+                        "url": full_url
+                    })
 
-                job_id = hashlib.md5(f"{title}{loc}".encode()).hexdigest()
-
-                jobs.append({
-                    "id": job_id,
-                    "title": title,
-                    "location": loc,
-                    "pay": pay,
-                    "url": f"https://www.jobsatamazon.co.uk{url}"
-                })
+                except Exception:
+                    continue
 
         except Exception as e:
-            print(f"Scraping error: {e}")
+            print("Scraping error:", e)
 
-        finally:
-            await browser.close()
+        await browser.close()
 
     return jobs
+
+
+# quick local test
+if __name__ == "__main__":
+    result = asyncio.run(get_amazon_jobs("london"))
+    print("Total jobs:", len(result))
+    for j in result[:10]:
+        print(j)
