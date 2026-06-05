@@ -28,7 +28,16 @@ async def get_amazon_jobs(location="London"):
             )
         })
 
-        url = f"{BASE_URL}/en/locations/{location.lower()}"
+        # Try the original search route
+        url = f"https://www.jobsatamazon.co.uk/#/search?location={location}"
+
+        # Capture network traffic
+        network_urls = []
+
+        def capture_response(response):
+            network_urls.append(response.url)
+
+        page.on("response", capture_response)
 
         try:
             print(f"Opening: {url}")
@@ -43,13 +52,13 @@ async def get_amazon_jobs(location="London"):
 
             print("Current URL:", page.url)
 
-            # Screenshot for debugging
+            # Screenshot
             await page.screenshot(
                 path="debug.png",
                 full_page=True
             )
 
-            # Save rendered HTML
+            # Save HTML
             html = await page.content()
 
             with open("debug.html", "w", encoding="utf-8") as f:
@@ -57,22 +66,39 @@ async def get_amazon_jobs(location="London"):
 
             print("HTML length:", len(html))
 
-            # Print frames
+            # Frames
             print("\n=== FRAMES ===")
             for frame in page.frames:
                 print(frame.url)
 
-            # Print links
+            # Network requests
+            print("\n=== NETWORK REQUESTS ===")
+
+            for req_url in network_urls:
+                if (
+                    "job" in req_url.lower()
+                    or "search" in req_url.lower()
+                    or "api" in req_url.lower()
+                    or "graphql" in req_url.lower()
+                ):
+                    print(req_url)
+
+            # Links
             links = await page.query_selector_all("a")
 
             print("\n=== LINK DEBUG ===")
             print("Total links:", len(links))
 
-            for link in links[:50]:
+            for link in links:
                 try:
                     href = await link.get_attribute("href")
                     text = (await link.inner_text()).strip()
-                    print("TEXT:", text[:50], "| HREF:", href)
+
+                    print({
+                        "text": text,
+                        "href": href
+                    })
+
                 except Exception:
                     pass
 
