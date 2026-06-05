@@ -7,7 +7,7 @@ BASE_URL = "https://www.jobsatamazon.co.uk"
 
 
 # -----------------------------
-# 🔥 NORMALIZER (ALWAYS SAFE OUTPUT)
+# 🔥 NORMALIZER (STABLE OUTPUT)
 # -----------------------------
 def normalize_job(job, location):
     try:
@@ -15,21 +15,16 @@ def normalize_job(job, location):
 
         raw_job_id = job.get("jobId") or job.get("id") or (title + location)
 
-        # stable internal id for bot tracking
         stable_id = hashlib.md5(str(raw_job_id).encode()).hexdigest()
 
-        job_id = job.get("jobId")  # real Amazon id if exists
+        job_id = job.get("jobId")
 
         return {
-            "id": stable_id,          # bot-safe unique id
-            "jobId": job_id,          # IMPORTANT for your bot logic
+            "id": stable_id,
+            "jobId": job_id,
             "title": title,
             "location": job.get("city") or location,
-            "url": (
-                f"{BASE_URL}/job/{job_id}"
-                if job_id
-                else "N/A"
-            ),
+            "url": f"{BASE_URL}/job/{job_id}" if job_id else "N/A",
             "pay": (
                 job.get("totalPayRateMinL10N")
                 or job.get("totalPayRateMin")
@@ -39,6 +34,36 @@ def normalize_job(job, location):
 
     except Exception:
         return None
+
+
+# -----------------------------
+# 🔥 SMART GRAPHQL EXTRACTOR
+# -----------------------------
+def extract_from_graphql(data, location):
+    jobs = []
+
+    if not isinstance(data, dict):
+        return jobs
+
+    for _, value in data.items():
+
+        if isinstance(value, dict):
+
+            # CASE 1: direct jobCards
+            if "jobCards" in value and isinstance(value["jobCards"], list):
+                for job in value["jobCards"]:
+                    norm = normalize_job(job, location)
+                    if norm:
+                        jobs.append(norm)
+
+            # CASE 2: nested objects
+            jobs.extend(extract_from_graphql(value, location))
+
+        elif isinstance(value, list):
+            for item in value:
+                jobs.extend(extract_from_graphql(item, location))
+
+    return jobs
 
 
 # -----------------------------
@@ -92,7 +117,7 @@ async def get_amazon_jobs(location="London"):
             await page.wait_for_timeout(5000)
 
             # -----------------------------
-            # FORCE SPA LOAD
+            # FORCE SPA ACTIVATION
             # -----------------------------
             try:
                 await page.click("text=See all jobs")
@@ -104,7 +129,9 @@ async def get_amazon_jobs(location="London"):
                 except:
                     print("No job button clicked (fallback mode)")
 
-            await page.wait_for_timeout(20000)
+            # IMPORTANT: trigger lazy GraphQL
+            await page.mouse.wheel(0, 1500)
+            await page.wait_for_timeout(15000)
             await page.wait_for_load_state("networkidle")
 
             print("Collected GraphQL responses:", len(graphql_data))
@@ -112,7 +139,7 @@ async def get_amazon_jobs(location="London"):
             await browser.close()
 
             # -----------------------------
-            # 🔥 EXTRACTION (FIXED LOGIC)
+            # 🔥 EXTRACTION (ROBUST)
             # -----------------------------
             print("\n=== EXTRACTING JOBS ===")
 
@@ -122,19 +149,14 @@ async def get_amazon_jobs(location="London"):
                 if not isinstance(entry, dict):
                     continue
 
-                data = entry.get("data", {})
+                data = entry.get("data")
+                if not isinstance(data, dict):
+                    continue
 
-                # PRIMARY SOURCE (Amazon GraphQL)
-                if isinstance(data, dict) and "searchJobCardsByLocation" in data:
-                    cards = data["searchJobCardsByLocation"].get("jobCards", [])
-
-                    for job in cards:
-                        normalized = normalize_job(job, location)
-                        if normalized:
-                            jobs.append(normalized)
+                jobs.extend(extract_from_graphql(data, location))
 
             # -----------------------------
-            # CLEAN + DEDUP
+            # CLEAN + DEDUP (IMPORTANT FIX)
             # -----------------------------
             cleaned = []
             seen = set()
@@ -143,7 +165,7 @@ async def get_amazon_jobs(location="London"):
                 if not j:
                     continue
 
-                key = j.get("jobId") or j.get("id")
+                key = j.get("jobId")  # FIX: do NOT use hashed id for dedup
 
                 if key and key not in seen:
                     seen.add(key)
