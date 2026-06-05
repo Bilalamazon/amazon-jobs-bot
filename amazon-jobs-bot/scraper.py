@@ -7,24 +7,19 @@ BASE_URL = "https://www.jobsatamazon.co.uk"
 
 
 # -----------------------------
-# 🔥 IMPROVED RECURSIVE EXTRACTOR
+# 🔥 RECURSIVE EXTRACTOR (FALLBACK ONLY)
 # -----------------------------
 def extract_jobs(obj, location):
     jobs = []
 
     if isinstance(obj, dict):
 
-        # 🔥 STRICT JOB DETECTION
-        if (
-            obj.get("title")
-            or obj.get("jobTitle")
-            or obj.get("name")
-        ):
+        # only fallback detection
+        if obj.get("title") or obj.get("jobTitle") or obj.get("name"):
             job = normalize_job(obj, location)
             if job:
                 jobs.append(job)
 
-        # recurse deeper safely
         for v in obj.values():
             jobs.extend(extract_jobs(v, location))
 
@@ -58,9 +53,6 @@ async def get_amazon_jobs(location="London"):
             )
         })
 
-        # -----------------------------
-        # 🔥 GRAPHQL CAPTURE
-        # -----------------------------
         async def handle_response(response):
             try:
                 if "graphql" in response.url.lower():
@@ -85,17 +77,10 @@ async def get_amazon_jobs(location="London"):
         try:
             print(f"Opening: {url}")
 
-            await page.goto(
-                url,
-                timeout=60000,
-                wait_until="domcontentloaded"
-            )
+            await page.goto(url, timeout=60000, wait_until="domcontentloaded")
 
             await page.wait_for_timeout(5000)
 
-            # -----------------------------
-            # CLICK TRIGGER (SPA LOAD)
-            # -----------------------------
             try:
                 await page.click("text=See all jobs")
                 print("Clicked: See all jobs")
@@ -114,34 +99,42 @@ async def get_amazon_jobs(location="London"):
             print("Collected GraphQL responses:", len(graphql_data))
 
             # -----------------------------
-            # 🔥 DEBUG STEP (IMPORTANT ADDITION)
+            # 🔥 DEBUG SAMPLE (optional)
             # -----------------------------
             print("\n=== GRAPHQL STRUCTURE SAMPLE ===")
-
-            for entry in graphql_data[:1]:  # only first response for debugging
+            for entry in graphql_data[:1]:
                 if isinstance(entry, dict) and "data" in entry:
                     print(json.dumps(entry["data"], indent=2)[:2000])
 
             await browser.close()
 
             # -----------------------------
-            # 🔥 GRAPHQL JOB EXTRACTION
+            # 🔥 FINAL EXTRACTION (IMPORTANT FIX)
             # -----------------------------
             print("\n=== EXTRACTING JOBS FROM GRAPHQL ===")
 
             jobs = []
 
             for entry in graphql_data:
-                if isinstance(entry, dict) and "data" in entry:
-                    data = entry["data"]
-                    jobs.extend(extract_jobs(data, location))
+                if not isinstance(entry, dict):
+                    continue
+
+                data = entry.get("data", {})
+
+                # 🔥 THIS IS THE REAL SOURCE
+                if isinstance(data, dict):
+                    if "searchJobCardsByLocation" in data:
+                        cards = data["searchJobCardsByLocation"].get("jobCards", [])
+                        jobs.extend(cards)
+                    else:
+                        jobs.extend(extract_jobs(data, location))
 
             jobs = [j for j in jobs if j]
 
             unique = {}
             for j in jobs:
-                if j and j.get("url"):
-                    unique[j["url"]] = j
+                if isinstance(j, dict) and j.get("jobId"):
+                    unique[j["jobId"]] = j
 
             jobs = list(unique.values())
 
@@ -156,50 +149,33 @@ async def get_amazon_jobs(location="London"):
 
 
 # -----------------------------
-# 🔥 NORMALIZER
+# 🔥 NORMALIZER (FINAL FIXED)
 # -----------------------------
 def normalize_job(job, location):
     try:
-        title = (
-            job.get("title")
-            or job.get("jobTitle")
-            or job.get("name")
-            or "Amazon Job"
-        )
+        title = job.get("jobTitle") or job.get("title") or "Amazon Job"
 
-        job_id_raw = job.get("id") or job.get("jobId") or title + location
-        job_id = hashlib.md5(str(job_id_raw).encode()).hexdigest()
+        job_id = hashlib.md5(
+            str(job.get("jobId") or title + location).encode()
+        ).hexdigest()
 
+        # real GraphQL does NOT give URL → construct it
         url = (
-            job.get("url")
-            or job.get("jobUrl")
-            or job.get("applyUrl")
-            or job.get("externalUrl")
+            f"https://www.jobsatamazon.co.uk/job/{job.get('jobId')}"
+            if job.get("jobId")
+            else "N/A"
         )
 
-        if not url and isinstance(job.get("links"), dict):
-            url = (
-                job["links"].get("apply")
-                or job["links"].get("self")
-                or job["links"].get("job")
-            )
+        pay = job.get("totalPayRateMinL10N") or job.get("totalPayRateMin") or "See listing"
 
-        if not url and isinstance(job.get("jobDetails"), dict):
-            url = (
-                job["jobDetails"].get("applyUrl")
-                or job["jobDetails"].get("url")
-                or job["jobDetails"].get("link")
-            )
-
-        if not url and job.get("id"):
-            url = f"{BASE_URL}/job/{job.get('id')}"
+        city = job.get("city") or location
 
         return {
             "id": job_id,
             "title": title,
-            "location": location,
-            "url": url if url else "N/A",
-            "pay": job.get("pay") or job.get("salary") or "See listing"
+            "location": city,
+            "url": url,
+            "pay": pay
         }
 
     except Exception:
