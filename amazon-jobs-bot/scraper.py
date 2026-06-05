@@ -51,15 +51,17 @@ async def get_amazon_jobs(location="London"):
             )
         })
 
+        # -----------------------------
+        # 🔥 GRAPHQL DEBUG (IMPORTANT)
+        # -----------------------------
         async def handle_response(response):
             try:
                 if "graphql" in response.url.lower():
+                    print("GRAPHQL HIT:", response.url)
+
                     try:
                         data = await response.json()
                         graphql_data.append(data)
-
-                        print("\n=== GRAPHQL RESPONSE CAPTURED ===")
-                        print("Keys:", list(data.keys()))
 
                     except Exception:
                         pass
@@ -71,8 +73,7 @@ async def get_amazon_jobs(location="London"):
             lambda response: asyncio.create_task(handle_response(response))
         )
 
-        # 🔥 FIX #1: correct route that actually triggers job search
-        url = f"{BASE_URL}/app#/search?location={location}"
+        url = f"{BASE_URL}/app#/jobSearch"
 
         try:
             print(f"Opening: {url}")
@@ -83,9 +84,26 @@ async def get_amazon_jobs(location="London"):
                 wait_until="domcontentloaded"
             )
 
-            # 🔥 FIX #2: allow GraphQL to fully fire
-            await page.wait_for_load_state("networkidle")
+            # -----------------------------
+            # 🔥 CRITICAL FIX: FORCE JOB LOAD
+            # -----------------------------
             await page.wait_for_timeout(5000)
+
+            # 👇 THIS is what triggers real GraphQL in SPA
+            try:
+                await page.click("text=See all jobs")
+                print("Clicked: See all jobs")
+            except:
+                try:
+                    await page.click("text=Find your next job")
+                    print("Clicked: Find your next job")
+                except:
+                    print("No job button clicked (fallback mode)")
+
+            # allow GraphQL to fire
+            await page.wait_for_timeout(20000)
+
+            await page.wait_for_load_state("networkidle")
 
             print("Current URL:", page.url)
             print("Page Title:", await page.title())
