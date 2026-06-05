@@ -7,6 +7,7 @@ BASE_URL = "https://www.jobsatamazon.co.uk"
 
 async def get_amazon_jobs(location="London"):
     jobs = []
+    graphql_data = []
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -28,44 +29,27 @@ async def get_amazon_jobs(location="London"):
             )
         })
 
-        # GraphQL response storage
-        graphql_responses = []
-
+        # Capture GraphQL responses
         async def handle_response(response):
             try:
                 if "graphql" in response.url.lower():
-                    print("\n=== GRAPHQL REQUEST ===")
-                    print(response.url)
-
                     try:
                         data = await response.json()
+                        graphql_data.append(data)
 
-                        graphql_responses.append(data)
-
-                        print("GRAPHQL RESPONSE KEYS:")
-                        print(list(data.keys()))
+                        print("\n=== GRAPHQL RESPONSE CAPTURED ===")
+                        print("Keys:", list(data.keys()))
 
                     except Exception:
-                        try:
-                            text = await response.text()
-
-                            print("GRAPHQL RESPONSE TEXT:")
-                            print(text[:2000])
-
-                        except Exception:
-                            pass
-
-            except Exception as e:
-                print("Response parse error:", e)
+                        pass
+            except Exception:
+                pass
 
         page.on(
             "response",
-            lambda response: asyncio.create_task(
-                handle_response(response)
-            )
+            lambda response: asyncio.create_task(handle_response(response))
         )
 
-        # Use the actual job search route
         url = "https://www.jobsatamazon.co.uk/app#/jobSearch"
 
         try:
@@ -82,102 +66,96 @@ async def get_amazon_jobs(location="London"):
             print("Current URL:", page.url)
             print("Page Title:", await page.title())
 
-            print(
-                "\nCollected GraphQL responses:",
-                len(graphql_responses)
-            )
+            print("\nCollected GraphQL responses:", len(graphql_data))
 
-            # Screenshot
-            await page.screenshot(
-                path="debug.png",
-                full_page=True
-            )
+            await browser.close()
 
-            # Save HTML
-            html = await page.content()
+            # -----------------------------
+            # 🔥 GRAPHQL JOB EXTRACTION
+            # -----------------------------
+            print("\n=== EXTRACTING JOBS FROM GRAPHQL ===")
 
-            with open("debug.html", "w", encoding="utf-8") as f:
-                f.write(html)
+            for entry in graphql_data:
+                if not isinstance(entry, dict):
+                    continue
 
-            print("HTML length:", len(html))
+                if "data" not in entry:
+                    continue
 
-            # Frames
-            print("\n=== FRAMES ===")
-            for frame in page.frames:
-                print(frame.url)
+                data = entry["data"]
 
-            # Links
-            links = await page.query_selector_all("a")
+                # Case 1: data is dict with lists inside
+                if isinstance(data, dict):
+                    for key, value in data.items():
 
-            print("\n=== LINK DEBUG ===")
-            print("Total links:", len(links))
+                        # direct list of jobs
+                        if isinstance(value, list):
+                            for job in value:
+                                jobs.append(normalize_job(job, location))
 
-            for link in links[:50]:
-                try:
-                    href = await link.get_attribute("href")
-                    text = (await link.inner_text()).strip()
+                        # nested dict
+                        elif isinstance(value, dict):
+                            for k2, v2 in value.items():
+                                if isinstance(v2, list):
+                                    for job in v2:
+                                        jobs.append(normalize_job(job, location))
 
-                    print({
-                        "text": text,
-                        "href": href
-                    })
+            # remove duplicates
+            unique = {}
+            for j in jobs:
+                if j and "url" in j:
+                    unique[j["url"]] = j
 
-                except Exception:
-                    pass
+            jobs = list(unique.values())
 
-            print("\n=== JOB EXTRACTION ===")
+            print(f"Total jobs scraped: {len(jobs)}")
 
-            seen = set()
-
-            for link in links:
-                try:
-                    href = await link.get_attribute("href")
-
-                    if not href:
-                        continue
-
-                    if "/job/" not in href and "/jobs/" not in href:
-                        continue
-
-                    title = (await link.inner_text()).strip()
-
-                    if len(title) < 3:
-                        title = "Amazon Job"
-
-                    if href.startswith("http"):
-                        full_url = href
-                    else:
-                        full_url = BASE_URL + href
-
-                    job_id = hashlib.md5(
-                        full_url.encode()
-                    ).hexdigest()
-
-                    if job_id in seen:
-                        continue
-
-                    seen.add(job_id)
-
-                    jobs.append({
-                        "id": job_id,
-                        "title": title,
-                        "location": location,
-                        "pay": "See listing",
-                        "url": full_url
-                    })
-
-                except Exception as e:
-                    print("Link parse error:", e)
-
-            print(f"\nTotal jobs scraped: {len(jobs)}")
+            return jobs
 
         except Exception as e:
             print("Scraping error:", e)
-
-        finally:
             await browser.close()
+            return []
 
-    return jobs
+
+def normalize_job(job, location):
+    """
+    Try to normalize Amazon GraphQL job objects safely
+    """
+
+    try:
+        title = (
+            job.get("title")
+            or job.get("name")
+            or job.get("jobTitle")
+            or "Amazon Job"
+        )
+
+        job_id_raw = (
+            job.get("id")
+            or job.get("jobId")
+            or title + location
+        )
+
+        job_id = hashlib.md5(str(job_id_raw).encode()).hexdigest()
+
+        url = (
+            job.get("url")
+            or job.get("link")
+            or job.get("jobUrl")
+            or ""
+        )
+
+        return {
+            "id": job_id,
+            "title": title,
+            "location": location,
+            "url": url if url else "N/A",
+            "pay": job.get("pay") or job.get("salary") or "See listing"
+        }
+
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":
