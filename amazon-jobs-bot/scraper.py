@@ -28,16 +28,45 @@ async def get_amazon_jobs(location="London"):
             )
         })
 
-        # Try the original search route
-        url = f"https://www.jobsatamazon.co.uk/#/search?location={location}"
+        # GraphQL response storage
+        graphql_responses = []
 
-        # Capture network traffic
-        network_urls = []
+        async def handle_response(response):
+            try:
+                if "graphql" in response.url.lower():
+                    print("\n=== GRAPHQL REQUEST ===")
+                    print(response.url)
 
-        def capture_response(response):
-            network_urls.append(response.url)
+                    try:
+                        data = await response.json()
 
-        page.on("response", capture_response)
+                        graphql_responses.append(data)
+
+                        print("GRAPHQL RESPONSE KEYS:")
+                        print(list(data.keys()))
+
+                    except Exception:
+                        try:
+                            text = await response.text()
+
+                            print("GRAPHQL RESPONSE TEXT:")
+                            print(text[:2000])
+
+                        except Exception:
+                            pass
+
+            except Exception as e:
+                print("Response parse error:", e)
+
+        page.on(
+            "response",
+            lambda response: asyncio.create_task(
+                handle_response(response)
+            )
+        )
+
+        # Use the actual job search route
+        url = "https://www.jobsatamazon.co.uk/app#/jobSearch"
 
         try:
             print(f"Opening: {url}")
@@ -48,9 +77,15 @@ async def get_amazon_jobs(location="London"):
                 wait_until="domcontentloaded"
             )
 
-            await page.wait_for_timeout(10000)
+            await page.wait_for_timeout(15000)
 
             print("Current URL:", page.url)
+            print("Page Title:", await page.title())
+
+            print(
+                "\nCollected GraphQL responses:",
+                len(graphql_responses)
+            )
 
             # Screenshot
             await page.screenshot(
@@ -71,25 +106,13 @@ async def get_amazon_jobs(location="London"):
             for frame in page.frames:
                 print(frame.url)
 
-            # Network requests
-            print("\n=== NETWORK REQUESTS ===")
-
-            for req_url in network_urls:
-                if (
-                    "job" in req_url.lower()
-                    or "search" in req_url.lower()
-                    or "api" in req_url.lower()
-                    or "graphql" in req_url.lower()
-                ):
-                    print(req_url)
-
             # Links
             links = await page.query_selector_all("a")
 
             print("\n=== LINK DEBUG ===")
             print("Total links:", len(links))
 
-            for link in links:
+            for link in links[:50]:
                 try:
                     href = await link.get_attribute("href")
                     text = (await link.inner_text()).strip()
