@@ -6,20 +6,18 @@ BASE_URL = "https://www.jobsatamazon.co.uk"
 
 
 # -----------------------------
-# 🔥 RECURSIVE EXTRACTOR (FIX)
+# 🔥 RECURSIVE EXTRACTOR (UNCHANGED)
 # -----------------------------
 def extract_jobs(obj, location):
     jobs = []
 
     if isinstance(obj, dict):
 
-        # detect possible job node
         if any(k in obj for k in ["title", "jobTitle", "name"]):
             job = normalize_job(obj, location)
             if job:
                 jobs.append(job)
 
-        # recurse deeper
         for v in obj.values():
             jobs.extend(extract_jobs(v, location))
 
@@ -73,7 +71,8 @@ async def get_amazon_jobs(location="London"):
             lambda response: asyncio.create_task(handle_response(response))
         )
 
-        url = "https://www.jobsatamazon.co.uk/app#/jobSearch"
+        # 🔥 FIX #1: correct route that actually triggers job search
+        url = f"{BASE_URL}/app#/search?location={location}"
 
         try:
             print(f"Opening: {url}")
@@ -84,7 +83,9 @@ async def get_amazon_jobs(location="London"):
                 wait_until="domcontentloaded"
             )
 
-            await page.wait_for_timeout(15000)
+            # 🔥 FIX #2: allow GraphQL to fully fire
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(5000)
 
             print("Current URL:", page.url)
             print("Page Title:", await page.title())
@@ -93,7 +94,7 @@ async def get_amazon_jobs(location="London"):
             await browser.close()
 
             # -----------------------------
-            # GRAPHQL JOB EXTRACTION (FIXED)
+            # GRAPHQL JOB EXTRACTION
             # -----------------------------
             print("\n=== EXTRACTING JOBS FROM GRAPHQL ===")
 
@@ -103,10 +104,8 @@ async def get_amazon_jobs(location="London"):
                 if isinstance(entry, dict) and "data" in entry:
                     jobs.extend(extract_jobs(entry["data"], location))
 
-            # remove None
             jobs = [j for j in jobs if j]
 
-            # deduplicate
             unique = {}
             for j in jobs:
                 if j and j.get("url"):
@@ -125,7 +124,7 @@ async def get_amazon_jobs(location="London"):
 
 
 # -----------------------------
-# 🔥 FIXED NORMALIZER (UNCHANGED BUT SAFE)
+# 🔥 NORMALIZER (UNCHANGED)
 # -----------------------------
 def normalize_job(job, location):
     try:
