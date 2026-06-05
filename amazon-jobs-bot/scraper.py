@@ -6,18 +6,24 @@ BASE_URL = "https://www.jobsatamazon.co.uk"
 
 
 # -----------------------------
-# 🔥 RECURSIVE EXTRACTOR (UNCHANGED)
+# 🔥 IMPROVED RECURSIVE EXTRACTOR
 # -----------------------------
 def extract_jobs(obj, location):
     jobs = []
 
     if isinstance(obj, dict):
 
-        if any(k in obj for k in ["title", "jobTitle", "name"]):
+        # 🔥 FIX: stricter job detection (prevents false positives)
+        if (
+            obj.get("title")
+            or obj.get("jobTitle")
+            or obj.get("name")
+        ):
             job = normalize_job(obj, location)
             if job:
                 jobs.append(job)
 
+        # recurse deeper safely
         for v in obj.values():
             jobs.extend(extract_jobs(v, location))
 
@@ -52,7 +58,7 @@ async def get_amazon_jobs(location="London"):
         })
 
         # -----------------------------
-        # 🔥 GRAPHQL DEBUG (IMPORTANT)
+        # 🔥 GRAPHQL CAPTURE
         # -----------------------------
         async def handle_response(response):
             try:
@@ -85,11 +91,10 @@ async def get_amazon_jobs(location="London"):
             )
 
             # -----------------------------
-            # 🔥 CRITICAL FIX: FORCE JOB LOAD
+            # 🔥 FORCE JOB LISTING LOAD
             # -----------------------------
             await page.wait_for_timeout(5000)
 
-            # 👇 THIS is what triggers real GraphQL in SPA
             try:
                 await page.click("text=See all jobs")
                 print("Clicked: See all jobs")
@@ -100,9 +105,8 @@ async def get_amazon_jobs(location="London"):
                 except:
                     print("No job button clicked (fallback mode)")
 
-            # allow GraphQL to fire
-            await page.wait_for_timeout(20000)
-
+            # allow GraphQL to fully load jobs
+            await page.wait_for_timeout(25000)
             await page.wait_for_load_state("networkidle")
 
             print("Current URL:", page.url)
@@ -112,7 +116,7 @@ async def get_amazon_jobs(location="London"):
             await browser.close()
 
             # -----------------------------
-            # GRAPHQL JOB EXTRACTION
+            # 🔥 GRAPHQL JOB EXTRACTION (FIXED)
             # -----------------------------
             print("\n=== EXTRACTING JOBS FROM GRAPHQL ===")
 
@@ -120,7 +124,14 @@ async def get_amazon_jobs(location="London"):
 
             for entry in graphql_data:
                 if isinstance(entry, dict) and "data" in entry:
-                    jobs.extend(extract_jobs(entry["data"], location))
+                    data = entry["data"]
+
+                    # 🔥 FIX: ensure full deep traversal
+                    jobs.extend(extract_jobs(data, location))
+
+                    if isinstance(data, dict):
+                        for v in data.values():
+                            jobs.extend(extract_jobs(v, location))
 
             jobs = [j for j in jobs if j]
 
@@ -148,8 +159,8 @@ def normalize_job(job, location):
     try:
         title = (
             job.get("title")
-            or job.get("name")
             or job.get("jobTitle")
+            or job.get("name")
             or "Amazon Job"
         )
 
@@ -178,7 +189,7 @@ def normalize_job(job, location):
             )
 
         if not url and job.get("id"):
-            url = f"https://www.jobsatamazon.co.uk/job/{job.get('id')}"
+            url = f"{BASE_URL}/job/{job.get('id')}"
 
         return {
             "id": job_id,
