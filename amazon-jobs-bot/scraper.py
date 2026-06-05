@@ -34,7 +34,7 @@ def normalize_job(job, location):
 
 
 # -----------------------------
-# 🔥 ONLY REAL EXTRACTOR (NO OVERENGINEERING)
+# 🔥 SIMPLE EXTRACTOR
 # -----------------------------
 def extract_jobs_from_cards(job_cards, location):
     jobs = []
@@ -49,7 +49,7 @@ def extract_jobs_from_cards(job_cards, location):
 
 
 # -----------------------------
-# 🔥 SCRAPER
+# 🔥 SCRAPER (FIXED LOGIC)
 # -----------------------------
 async def get_amazon_jobs(location="London"):
     graphql_data = []
@@ -75,29 +75,18 @@ async def get_amazon_jobs(location="London"):
         })
 
         # -----------------------------
-        # 🔥 GRAPHQL CAPTURE (STRICT FILTER)
+        # 🔥 GRAPHQL CAPTURE (NO FILTERING HERE)
         # -----------------------------
         async def handle_response(response):
             try:
-                url = response.url.lower()
-
-                # IMPORTANT FILTER: only job search endpoint
-                if "graphql" not in url:
+                if "graphql" not in response.url.lower():
                     return
 
                 data = await response.json()
 
-                # ONLY keep responses that actually contain jobCards
-                if (
-                    isinstance(data, dict)
-                    and "data" in data
-                    and isinstance(data["data"], dict)
-                    and "searchJobCardsByLocation" in data["data"]
-                ):
-                    job_cards = data["data"]["searchJobCardsByLocation"].get("jobCards")
-
-                    if job_cards:  # 👈 KEY FIX: ignore empty responses
-                        graphql_data.append(data["data"])
+                if isinstance(data, dict) and "data" in data:
+                    graphql_data.append(data["data"])
+                    print("Captured GraphQL payload")
 
             except Exception:
                 pass
@@ -123,11 +112,11 @@ async def get_amazon_jobs(location="London"):
                 except:
                     pass
 
-            # 🔥 IMPORTANT: trigger lazy loading properly
+            # 🔥 IMPORTANT: trigger lazy GraphQL properly
             await page.mouse.wheel(0, 3000)
-            await page.wait_for_timeout(20000)
+            await page.wait_for_timeout(25000)
 
-            print("Collected valid GraphQL payloads:", len(graphql_data))
+            print(f"Collected GraphQL payloads: {len(graphql_data)}")
 
             await browser.close()
 
@@ -139,18 +128,25 @@ async def get_amazon_jobs(location="London"):
             all_jobs = []
 
             for entry in graphql_data:
-                data = entry.get("searchJobCardsByLocation", {})
-                job_cards = data.get("jobCards", [])
+                if not isinstance(entry, dict):
+                    continue
 
-                all_jobs.extend(extract_jobs_from_cards(job_cards, location))
+                block = entry.get("searchJobCardsByLocation", {})
+
+                if isinstance(block, dict):
+                    job_cards = block.get("jobCards") or []
+                    all_jobs.extend(extract_jobs_from_cards(job_cards, location))
 
             # -----------------------------
-            # DEDUP (REAL jobId BASED)
+            # DEDUP (SAFE)
             # -----------------------------
             seen = set()
             cleaned = []
 
             for j in all_jobs:
+                if not j:
+                    continue
+
                 job_id = j.get("jobId")
 
                 if job_id and job_id not in seen:
