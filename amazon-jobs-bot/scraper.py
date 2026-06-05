@@ -49,7 +49,7 @@ def extract_jobs_from_cards(job_cards, location):
 
 
 # -----------------------------
-# 🔥 SCRAPER (FIXED PROPERLY)
+# 🔥 SCRAPER (FINAL FIX)
 # -----------------------------
 async def get_amazon_jobs(location="London"):
     graphql_data = []
@@ -75,7 +75,7 @@ async def get_amazon_jobs(location="London"):
         })
 
         # -------------------------------------------------
-        # 🔥 FIX: ROUTE INTERCEPTION (THIS IS THE REAL FIX)
+        # 🔥 ROUTE INTERCEPTION (FIXED PROPERLY)
         # -------------------------------------------------
         async def handle_route(route, request):
             try:
@@ -89,25 +89,22 @@ async def get_amazon_jobs(location="London"):
                 except Exception:
                     return await route.continue_()
 
-                # ONLY keep valid job payloads
+                # ONLY check structure, DO NOT filter jobCards here
                 if (
                     isinstance(data, dict)
                     and "data" in data
                     and isinstance(data["data"], dict)
                     and "searchJobCardsByLocation" in data["data"]
                 ):
-                    job_block = data["data"]["searchJobCardsByLocation"]
-
-                    if job_block.get("jobCards"):
-                        graphql_data.append(job_block)
-                        print("Captured GraphQL payload")
+                    graphql_data.append(data["data"])
+                    print("Captured GraphQL payload")
 
                 return await route.fulfill(response=response)
 
             except Exception:
                 return await route.continue_()
 
-        # IMPORTANT: attach BEFORE goto
+        # IMPORTANT: attach BEFORE navigation
         await page.route("**/*", handle_route)
 
         url = f"{BASE_URL}/app#/jobSearch"
@@ -120,7 +117,7 @@ async def get_amazon_jobs(location="London"):
             await page.wait_for_timeout(4000)
 
             # -----------------------------
-            # FORCE JOB LOAD
+            # FORCE UI LOAD
             # -----------------------------
             try:
                 await page.click("text=See all jobs", timeout=3000)
@@ -130,9 +127,9 @@ async def get_amazon_jobs(location="London"):
                 except:
                     pass
 
-            # trigger lazy load
+            # trigger lazy network calls
             await page.mouse.wheel(0, 4000)
-            await page.wait_for_timeout(8000)
+            await page.wait_for_timeout(10000)
             await page.wait_for_load_state("networkidle")
 
             print(f"Collected GraphQL payloads: {len(graphql_data)}")
@@ -147,11 +144,13 @@ async def get_amazon_jobs(location="London"):
             all_jobs = []
 
             for block in graphql_data:
-                job_cards = block.get("jobCards", [])
-                all_jobs.extend(extract_jobs_from_cards(job_cards, location))
+                job_cards = block.get("searchJobCardsByLocation", {}).get("jobCards", [])
+
+                if job_cards:
+                    all_jobs.extend(extract_jobs_from_cards(job_cards, location))
 
             # -----------------------------
-            # DEDUP
+            # DEDUP (SAFE)
             # -----------------------------
             seen = set()
             cleaned = []
