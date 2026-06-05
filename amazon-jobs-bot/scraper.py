@@ -34,7 +34,7 @@ def normalize_job(job, location):
 
 
 # -----------------------------
-# 🔥 SIMPLE EXTRACTOR
+# 🔥 EXTRACTOR
 # -----------------------------
 def extract_jobs_from_cards(job_cards, location):
     jobs = []
@@ -49,7 +49,7 @@ def extract_jobs_from_cards(job_cards, location):
 
 
 # -----------------------------
-# 🔥 SCRAPER (FIXED LOGIC)
+# 🔥 SCRAPER (REAL FIX)
 # -----------------------------
 async def get_amazon_jobs(location="London"):
     graphql_data = []
@@ -75,18 +75,32 @@ async def get_amazon_jobs(location="London"):
         })
 
         # -----------------------------
-        # 🔥 GRAPHQL CAPTURE (NO FILTERING HERE)
+        # 🔥 GRAPHQL CAPTURE (FIXED)
         # -----------------------------
         async def handle_response(response):
             try:
-                if "graphql" not in response.url.lower():
+                url = response.url.lower()
+
+                if "graphql" not in url:
                     return
 
                 data = await response.json()
 
-                if isinstance(data, dict) and "data" in data:
-                    graphql_data.append(data["data"])
-                    print("Captured GraphQL payload")
+                # ---- FIX: detect REAL job payload anywhere ----
+                if not isinstance(data, dict):
+                    return
+
+                # case 1: direct shape
+                if "data" in data and isinstance(data["data"], dict):
+                    inner = data["data"]
+
+                    if "searchJobCardsByLocation" in inner:
+                        job_cards = inner["searchJobCardsByLocation"].get("jobCards", [])
+
+                        if job_cards:
+                            graphql_data.append(inner)
+
+                            print("Captured GraphQL payload (jobCards found)")
 
             except Exception:
                 pass
@@ -99,46 +113,49 @@ async def get_amazon_jobs(location="London"):
             print(f"Opening: {url}")
 
             await page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(5000)
+
+            # give SPA time
+            await page.wait_for_timeout(3000)
 
             # -----------------------------
-            # FORCE JOB LOAD
+            # FORCE UI LOAD
             # -----------------------------
             try:
-                await page.click("text=See all jobs")
+                await page.click("text=See all jobs", timeout=3000)
             except:
                 try:
-                    await page.click("text=Find your next job")
+                    await page.click("text=Find your next job", timeout=3000)
                 except:
                     pass
 
-            # 🔥 IMPORTANT: trigger lazy GraphQL properly
+            # 🔥 CRITICAL: force network re-trigger
             await page.mouse.wheel(0, 3000)
-            await page.wait_for_timeout(25000)
+            await page.wait_for_timeout(5000)
+
+            # wait for actual API bursts
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(8000)
 
             print(f"Collected GraphQL payloads: {len(graphql_data)}")
 
             await browser.close()
 
             # -----------------------------
-            # 🔥 FINAL EXTRACTION
+            # 🔥 EXTRACTION
             # -----------------------------
             print("\n=== EXTRACTING JOBS ===")
 
             all_jobs = []
 
             for entry in graphql_data:
-                if not isinstance(entry, dict):
-                    continue
-
                 block = entry.get("searchJobCardsByLocation", {})
 
                 if isinstance(block, dict):
-                    job_cards = block.get("jobCards") or []
+                    job_cards = block.get("jobCards", [])
                     all_jobs.extend(extract_jobs_from_cards(job_cards, location))
 
             # -----------------------------
-            # DEDUP (SAFE)
+            # DEDUP (REAL FIX)
             # -----------------------------
             seen = set()
             cleaned = []
