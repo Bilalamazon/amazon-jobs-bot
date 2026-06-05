@@ -120,7 +120,7 @@ async def get_amazon_jobs(location="London"):
 
 
 # -----------------------------
-# 🔥 IMPROVED NORMALIZER (FIXED)
+# 🔥 FIXED NORMALIZER (IMPROVED URL HANDLING)
 # -----------------------------
 def normalize_job(job, location):
     try:
@@ -134,7 +134,7 @@ def normalize_job(job, location):
         job_id_raw = job.get("id") or job.get("jobId") or title + location
         job_id = hashlib.md5(str(job_id_raw).encode()).hexdigest()
 
-        # 🔥 FIX: robust URL extraction
+        # 🔥 STRONG URL RESOLUTION (FIXED VERSION)
         url = (
             job.get("url")
             or job.get("jobUrl")
@@ -142,12 +142,25 @@ def normalize_job(job, location):
             or job.get("externalUrl")
         )
 
-        # fallback: nested links
+        # nested: links object
         if not url and isinstance(job.get("links"), dict):
             url = (
                 job["links"].get("apply")
                 or job["links"].get("self")
+                or job["links"].get("job")
             )
+
+        # nested: jobDetails object
+        if not url and isinstance(job.get("jobDetails"), dict):
+            url = (
+                job["jobDetails"].get("applyUrl")
+                or job["jobDetails"].get("url")
+                or job["jobDetails"].get("link")
+            )
+
+        # fallback: build from ID
+        if not url and job.get("id"):
+            url = f"https://www.jobsatamazon.co.uk/job/{job.get('id')}"
 
         return {
             "id": job_id,
